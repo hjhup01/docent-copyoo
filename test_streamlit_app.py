@@ -50,6 +50,27 @@ def signed_in_app(root):
     app.main()
 
 
+def no_permission_app(root):
+    import sys
+
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import streamlit_app as app
+    from google_sheets import PermissionMissing
+
+    class NoDriveScope:
+        def __init__(self, token):
+            pass
+
+        def find_or_create(self):
+            raise PermissionMissing("Google 드라이브 파일 권한이 없습니다. 다시 로그인해 주세요.")
+
+    app.JournalSheets = NoDriveScope
+    app.current_user = lambda: {"email": "tester@example.com", "token": "token"}
+    app.search_client = lambda: None
+    app.main()
+
+
 def signed_out_app(root, configured):
     import sys
 
@@ -88,6 +109,12 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertFalse(configured.error)
         self.assertTrue(configured.button(key="login-main"))
         self.assertTrue(configured.button(key="login-side"))
+
+    def test_missing_drive_permission_offers_login_again(self):
+        at = AppTest.from_function(no_permission_app, args=(ROOT,), default_timeout=20).run()
+        self.assertFalse(at.exception)
+        self.assertTrue(any("드라이브 파일 권한" in warning.value for warning in at.warning))
+        self.assertTrue(any(button.label == "로그아웃하고 다시 로그인" for button in at.button))
 
     def test_lists_records_and_shows_selected_detail(self):
         at = self.app()

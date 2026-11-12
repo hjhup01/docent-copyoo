@@ -16,7 +16,7 @@ from pathlib import Path
 import streamlit as st
 
 import journal_core as core
-from google_sheets import AuthExpired, GoogleError, JournalSheets
+from google_sheets import AuthExpired, GoogleError, JournalSheets, PermissionMissing
 from public_data import ExhibitionSearch, PublicDataError
 
 ROOT = Path(__file__).resolve().parent
@@ -216,6 +216,9 @@ def load_journal(user, force=False):
         docent, visits = client.read_records(sheet_id)
     except AuthExpired:
         ss["auth_expired"] = True
+        return
+    except PermissionMissing as error:
+        ss["permission_missing"] = str(error)
         return
     except GoogleError as error:
         ss["load_error"] = str(error)
@@ -731,6 +734,12 @@ def main():
     if ss.get("auth_expired"):
         st.warning("구글 로그인이 만료되었습니다. 다시 로그인해 주세요.")
         if st.button("다시 로그인", type="primary"):
+            ss.clear()
+            st.logout()
+        return
+    if ss.get("permission_missing"):
+        st.warning(ss["permission_missing"])
+        if st.button("로그아웃하고 다시 로그인", type="primary"):
             ss.clear()
             st.logout()
         return

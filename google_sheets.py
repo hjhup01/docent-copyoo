@@ -40,6 +40,46 @@ class AuthExpired(GoogleError):
     """The Google access token is no longer valid."""
 
 
+class PermissionMissing(GoogleError):
+    """The token lacks the Drive scope (e.g. the user unticked it on the consent screen)."""
+
+
+def _google_error_reason(payload):
+    """(status, reasons, message) from a Google API JSON error body; no secrets inside."""
+    try:
+        error = json.loads(payload or b"{}").get("error") or {}
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        return "", set(), ""
+    if not isinstance(error, dict):
+        return "", set(), ""
+    reasons = {str(item.get("reason", "")) for item in error.get("errors") or [] if isinstance(item, dict)}
+    for detail in error.get("details") or []:
+        if isinstance(detail, dict) and detail.get("reason"):
+            reasons.add(str(detail["reason"]))
+    return str(error.get("status") or ""), reasons, str(error.get("message") or "")[:200]
+
+
+def _http_error(error):
+    """Turn a Google API HTTP error into a specific, user-facing GoogleError."""
+    status, reasons, message = _google_error_reason(error.read())
+    if error.code == 401:
+        return AuthExpired("Google 로그인이 만료되었습니다. 다시 로그인해 주세요.")
+    if reasons & {"ACCESS_TOKEN_SCOPE_INSUFFICIENT", "insufficientPermissions"} or "insufficient authentication scopes" in message.lower():
+        return PermissionMissing(
+            "Google 드라이브 파일 권한이 없습니다. 로그아웃한 뒤 다시 로그인하고, 구글 동의 화면에서 "
+            "‘Google Drive 파일’ 항목을 체크해 허용해 주세요. 동의 화면에 그 항목이 보이지 않으면 "
+            "Streamlit Secrets의 [auth.client_kwargs] scope에 drive.file이 들어 있는지 확인해 주세요.")
+    if reasons & {"SERVICE_DISABLED", "accessNotConfigured"} or "has not been used in project" in message:
+        api = "Google Drive API" if "drive" in message.lower() else "Google Sheets API"
+        return GoogleError(f"구글 클라우드 프로젝트에서 {api}가 사용 설정되지 않았습니다. 콘솔의 API 라이브러리에서 사용 설정해 주세요.")
+    if error.code == 404:
+        return GoogleError("Google 시트를 찾지 못했습니다. 페이지를 새로고침해 주세요.")
+    if error.code == 429 or "RATE_LIMIT_EXCEEDED" in reasons:
+        return GoogleError("Google 시트 요청이 많아 잠시 제한되었습니다. 잠시 후 다시 시도해 주세요.")
+    detail = f" (HTTP {error.code}{' ' + status if status else ''})"
+    return GoogleError("Google 시트에 접근하지 못했습니다. 권한과 시트 설정을 확인해 주세요." + detail)
+
+
 def _request_json(url, method="GET", token=None, data=None, params=None):
     if params:
         url += ("&" if "?" in url else "?") + urlencode(params)
@@ -55,9 +95,7 @@ def _request_json(url, method="GET", token=None, data=None, params=None):
             payload = response.read()
             return json.loads(payload) if payload else {}
     except HTTPError as error:
-        if error.code == 401:
-            raise AuthExpired("Google 로그인이 만료되었습니다. 다시 로그인해 주세요.") from None
-        raise GoogleError("Google 시트에 접근하지 못했습니다. 권한과 시트 설정을 확인해 주세요.") from None
+        raise _http_error(error) from None
     except (URLError, TimeoutError, OSError, ValueError):
         raise GoogleError("Google 서비스에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.") from None
 

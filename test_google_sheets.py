@@ -136,6 +136,32 @@ class JournalSheetsTests(unittest.TestCase):
         self.assertIn("redirect_uri=http%3A%2F%2Flocalhost%3A8501", url)
 
 
+class GoogleErrorMessageTests(unittest.TestCase):
+    def _error(self, code, body):
+        import io
+        return HTTPError("https://sheets.googleapis.com", code, "err", {}, io.BytesIO(json.dumps(body).encode()))
+
+    def test_missing_drive_scope_asks_to_log_in_again(self):
+        body = {"error": {"code": 403, "status": "PERMISSION_DENIED",
+                          "message": "Request had insufficient authentication scopes.",
+                          "details": [{"reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT"}]}}
+        error = google_sheets._http_error(self._error(403, body))
+        self.assertIsInstance(error, google_sheets.PermissionMissing)
+        self.assertIn("다시 로그인", str(error))
+
+    def test_disabled_api_is_named(self):
+        body = {"error": {"code": 403, "status": "PERMISSION_DENIED",
+                          "message": "Google Sheets API has not been used in project 123 before or it is disabled.",
+                          "details": [{"reason": "SERVICE_DISABLED"}]}}
+        self.assertIn("Google Sheets API", str(google_sheets._http_error(self._error(403, body))))
+
+    def test_expired_token_and_unknown_errors(self):
+        self.assertIsInstance(google_sheets._http_error(self._error(401, {})), google_sheets.AuthExpired)
+        unknown = google_sheets._http_error(self._error(500, {"error": {"status": "INTERNAL"}}))
+        self.assertIn("HTTP 500 INTERNAL", str(unknown))
+        self.assertNotIsInstance(unknown, google_sheets.PermissionMissing)
+
+
 class RequestValidationTests(unittest.TestCase):
     def test_valid_records_are_normalized(self):
         records = [{
