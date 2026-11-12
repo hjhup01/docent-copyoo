@@ -730,6 +730,8 @@ function setupPosterField() {
   if (!input) return;
   input.addEventListener("input", updatePosterPreview);
   elements.formContent.querySelector(".poster-clear").addEventListener("click", () => {
+    if (!input.value.trim()) return;
+    if (!window.confirm("포스터를 뺄까요? ‘기록 저장’을 누르기 전에는 ‘취소’로 되돌릴 수 있어요.")) return;
     input.value = "";
     updatePosterPreview();
   });

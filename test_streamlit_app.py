@@ -169,6 +169,26 @@ class StreamlitAppTests(unittest.TestCase):
         session = next(r for r in self.store()["records"] if r["id"] == "d1")["sessions"][0]
         self.assertEqual((session["participants"], session["notes"]), (15, "메모"))
 
+    def test_cancel_in_confirmation_keeps_everything(self):
+        at = self.app()
+        at.button(key="del-record").click().run()
+        self.assertTrue(any("삭제할까요" in m.value for m in at.markdown))  # asks first
+        self.assertEqual(self.store()["writes"], 0)                       # nothing deleted yet
+        at.button(key="cf_cancel").click().run()
+        at.button(key="del-session-0").click().run()
+        self.assertTrue(any("1회차" in m.value and "삭제할까요" in m.value for m in at.markdown))
+        at.button(key="cf_cancel").click().run()
+        self.assertEqual(self.store()["writes"], 0)
+        record = next(r for r in self.store()["records"] if r["id"] == "d1")
+        self.assertEqual(len(record["sessions"]), 1)
+
+    def test_delete_session_after_confirmation(self):
+        at = self.app()
+        at.button(key="del-session-0").click().run()
+        at.button(key="cf_delete").click().run()
+        record = next(r for r in self.store()["records"] if r["id"] == "d1")
+        self.assertEqual(record["sessions"], [])
+
     def test_delete_record_after_confirmation(self):
         at = self.app()
         at.button(key="pick-d2").click().run()
