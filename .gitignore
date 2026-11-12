@@ -1,0 +1,9 @@
+# 비밀값은 GitHub에 올리지 않는다
+.env
+.streamlit/secrets.toml
+
+# 실행·테스트 부산물
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.claude/

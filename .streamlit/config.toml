@@ -1,0 +1,17 @@
+# miniPJT와 같은 디자인 시안 C '다크 갤러리': 어두운 전시실 + 금색 포인트
+[theme]
+base = "dark"
+primaryColor = "#c9a45c"
+backgroundColor = "#16171b"
+secondaryBackgroundColor = "#1f2026"
+textColor = "#ecebe6"
+linkColor = "#d8b46a"
+borderColor = "#2e2f36"
+baseRadius = "0.6rem"
+
+[theme.sidebar]
+backgroundColor = "#101114"
+secondaryBackgroundColor = "#1f2026"
+
+[client]
+toolbarMode = "minimal"

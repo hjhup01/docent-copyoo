@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#16171b" />
+    <meta name="color-scheme" content="dark" />
+    <title>나의 전시 기록</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <!-- Sidebar: same structure as miniPJT (logo + tagline, card with gold top line, account card at the bottom) -->
+      <aside class="sidebar">
+        <div class="sidebar-top">
+          <a class="brand" href="/" aria-label="나의 전시 기록 처음 화면">
+            <span class="brand-mark" aria-hidden="true">🖼️</span>
+            <span>나의 전시 기록</span>
+          </a>
+          <p class="tagline">도슨트로 나눈 이야기와 관람한 작품을 기록하세요</p>
+        </div>
+
+        <section class="side-card auth-only" aria-label="기록 통계">
+          <p class="side-card-title">JOURNAL · 나의 기록</p>
+          <div class="stats">
+            <div class="stat"><strong id="docent-stat">0</strong><span>도슨트 수행 전시</span></div>
+            <div class="stat"><strong id="visit-stat">0</strong><span>관람한 전시</span></div>
+          </div>
+          <p class="storage-note" id="storage-note"><span class="privacy-dot" aria-hidden="true"></span>내 구글 드라이브의 ‘나의 전시 기록’ 시트에 저장돼요.</p>
+        </section>
+
+        <section class="account-card" aria-label="계정">
+          <div class="account-row auth-only">
+            <span class="avatar" id="account-avatar" aria-hidden="true"></span>
+            <span class="account-email" id="account-email"></span>
+          </div>
+          <button class="button button-primary account-login" id="login-button" type="button" hidden>🔑 구글로 로그인</button>
+          <button class="text-button logout-button" id="logout-button" type="button" hidden>로그아웃</button>
+          <p class="account-hint">기록은 로그인한 계정의 구글 드라이브에만 저장됩니다.</p>
+        </section>
+      </aside>
+
+      <main class="main">
+        <nav class="tabs auth-only" role="tablist" aria-label="기록 종류">
+          <button class="tab active" type="button" role="tab" id="tab-docent" aria-controls="workspace" data-tab="docent" aria-selected="true">
+            <span class="tab-icon" aria-hidden="true">🎙️</span>Docent 수행기록
+            <span class="tab-count" id="docent-count">0</span>
+          </button>
+          <button class="tab" type="button" role="tab" id="tab-visit" aria-controls="workspace" data-tab="visit" aria-selected="false" tabindex="-1">
+            <span class="tab-icon" aria-hidden="true">📒</span>관람한 전시
+            <span class="tab-count" id="visit-count">0</span>
+          </button>
+        </nav>
+
+        <section class="auth-screen" id="auth-screen" hidden>
+          <div class="auth-card">
+            <span class="auth-icon" aria-hidden="true">🖼️</span>
+            <p class="eyebrow">YOUR PRIVATE EXHIBITION JOURNAL</p>
+            <h1>전시와 함께한 순간을<br />나만의 기록으로.</h1>
+            <p class="auth-description">구글 계정으로 로그인하면 Docent 수행 기록과 관람 기록이 내 구글 드라이브의 스프레드시트에 저장됩니다.</p>
+            <button class="button button-primary auth-login" id="auth-login-button" type="button">🔑 구글로 로그인하고 시작하기</button>
+            <p class="auth-message" id="auth-message" role="status"></p>
+          </div>
+        </section>
+
+        <div class="app-content" id="app-content" hidden>
+          <section class="workspace" id="workspace" role="tabpanel" aria-label="기록 목록과 상세 정보">
+            <div class="pane-column">
+              <div class="pane-head">
+                <p class="visually-hidden" id="list-eyebrow">MY DOCENT JOURNAL</p>
+                <h2 class="pane-title" id="list-title">Docent 수행 기록</h2>
+                <button class="icon-button" id="add-record" type="button" aria-label="새 기록 추가" title="새 기록 추가">＋</button>
+              </div>
+              <aside class="pane list-panel">
+                <label class="search-box">
+                  <span aria-hidden="true">🔍</span>
+                  <input id="search-input" type="search" placeholder="전시 제목 또는 공간 검색" aria-label="전시 제목 또는 공간 검색" />
+                  <kbd>/</kbd>
+                </label>
+                <p class="result-count" id="result-count" aria-live="polite">기록 0개</p>
+                <div class="record-list" id="record-list"></div>
+              </aside>
+            </div>
+            <div class="pane-column">
+              <div class="pane-head"><h2 class="pane-title">기록 상세</h2></div>
+              <article class="pane detail-panel" id="detail-panel" aria-label="전시 기록 상세 정보"></article>
+            </div>
+          </section>
+        </div>
+      </main>
+    </div>
+
+    <dialog id="record-dialog" class="record-dialog">
+      <form id="record-form">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow" id="dialog-eyebrow">NEW EXHIBITION</p>
+            <h2 id="dialog-title">전시 기록 추가</h2>
+          </div>
+          <button class="icon-button close-dialog" type="button" aria-label="닫기">×</button>
+        </div>
+        <div id="form-content" class="form-content"></div>
+        <div class="dialog-actions">
+          <button class="button button-quiet cancel-dialog" type="button">취소</button>
+          <button class="button button-primary" type="submit">기록 저장</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
