@@ -50,6 +50,56 @@ const SESSION_FIELDS = ["performedAt", ...AUDIENCES.map(([key]) => key), "questi
 
 const hasCount = (value) => value !== "" && value != null;
 
+// Session photos: kept in the user's Google Drive, the sheet stores their IDs.
+const MAX_PHOTOS = 5;
+const MAX_PHOTO_BYTES = 10 * 1024 * 1024;
+const photoUrl = (id) => `/api/photos/${encodeURIComponent(id)}`;
+// While the session dialog is open: photos already saved, newly picked files, photos to remove.
+const photoDraft = { kept: [], added: [], removed: [] };
+
+function resetPhotoDraft(photos = []) {
+  photoDraft.added.forEach((item) => URL.revokeObjectURL(item.preview));
+  photoDraft.kept = [...photos];
+  photoDraft.added = [];
+  photoDraft.removed = [];
+}
+
+function photoCount() {
+  return photoDraft.kept.length + photoDraft.added.length;
+}
+
+async function uploadPhoto(file) {
+  let response;
+  try {
+    response = await fetch("/api/photos", {
+      method: "POST", credentials: "same-origin", body: file,
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+    });
+  } catch (error) {
+    throw new Error("사진을 올리지 못했습니다. 네트워크를 확인해 주세요.", { cause: error });
+  }
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.id) {
+    if (response.status === 401) handleSignedOut(result.error);
+    throw new Error(result.error || "사진을 올리지 못했습니다.");
+  }
+  return result.id;
+}
+
+// Best effort: photos removed from the journal go to the Drive trash (recoverable for 30 days).
+function trashPhotos(ids) {
+  ids.forEach((id) => {
+    fetch(photoUrl(id), { method: "DELETE", credentials: "same-origin" }).catch(() => {});
+  });
+}
+
+function sessionPhotosHtml(session) {
+  const photos = session.photos || [];
+  if (!photos.length) return "";
+  return `<div class="session-photos">${photos.map((id, index) => `<a href="${photoUrl(id)}" target="_blank" rel="noopener" title="사진 크게 보기">
+    <img src="${photoUrl(id)}" alt="수행 사진 ${index + 1}" loading="lazy" /></a>`).join("")}</div>`;
+}
+
 // "총 20명 (성인 12 · 청소년 5 · 어린이 3)"; sessions saved before the
 // breakdown existed only have a total.
 function participantsText(session) {
@@ -351,6 +401,7 @@ function renderDocentDetail(record) {
           <div class="detail-actions"><button class="text-button edit-session" type="button" data-index="${index}"${disabled}>수정</button><button class="text-button danger delete-session" type="button" data-index="${index}"${disabled}>삭제</button></div></div>
         <p class="session-people"><span>참여 인원</span>${escapeHtml(participantsText(session))}</p>
         ${sessionNotes(session)}
+        ${sessionPhotosHtml(session)}
       </article>`).join("") : emptyState("", "아직 수행 회차가 없습니다", "위의 ＋ 회차 추가 버튼으로 도슨트를 진행한 날의 기록을 남겨 보세요.")}
     </section>`;
 }
@@ -399,6 +450,53 @@ function render() {
   renderDetail();
 }
 
+function renderPhotoGrid() {
+  const grid = elements.formContent.querySelector(".photo-grid");
+  if (!grid) return;
+  const items = [
+    ...photoDraft.kept.map((id) => ({ key: `kept:${id}`, src: photoUrl(id) })),
+    ...photoDraft.added.map((item, index) => ({ key: `added:${index}`, src: item.preview, isNew: true })),
+  ];
+  grid.innerHTML = items.length
+    ? items.map((item) => `<figure class="photo-thumb"><img src="${escapeHtml(item.src)}" alt="" />
+        ${item.isNew ? '<span class="photo-new">새 사진</span>' : ""}
+        <button type="button" class="photo-remove" data-key="${escapeHtml(item.key)}" aria-label="사진 빼기">×</button></figure>`).join("")
+    : '<p class="photo-empty">아직 사진이 없어요.</p>';
+  elements.formContent.querySelector(".photo-count").textContent = `${photoCount()} / ${MAX_PHOTOS}`;
+  elements.formContent.querySelector(".photo-pick").classList.toggle("is-disabled", photoCount() >= MAX_PHOTOS);
+}
+
+function setupPhotoPicker() {
+  const input = elements.formContent.querySelector(".photo-pick input");
+  input.addEventListener("change", () => {
+    const files = [...input.files];
+    input.value = "";
+    const room = MAX_PHOTOS - photoCount();
+    const accepted = files.filter((file) => /^image\/(jpeg|png|webp)$/.test(file.type) && file.size <= MAX_PHOTO_BYTES);
+    if (accepted.length < files.length) window.alert("JPG·PNG·WEBP 사진만, 한 장에 10MB 이하로 올릴 수 있어요.");
+    if (accepted.length > room) window.alert(`회차당 사진은 ${MAX_PHOTOS}장까지예요. 앞의 ${Math.max(room, 0)}장만 추가했어요.`);
+    accepted.slice(0, Math.max(room, 0)).forEach((file) => {
+      photoDraft.added.push({ file, preview: URL.createObjectURL(file) });
+    });
+    renderPhotoGrid();
+  });
+  elements.formContent.querySelector(".photo-grid").addEventListener("click", (event) => {
+    const button = event.target.closest(".photo-remove");
+    if (!button || state.saving) return;
+    if (!window.confirm("이 사진을 뺄까요? ‘저장’을 누르면 드라이브 휴지통으로 옮겨져요(30일 동안 되살릴 수 있어요).")) return;
+    const [kind, value] = button.dataset.key.split(/:(.*)/s);
+    if (kind === "kept") {
+      photoDraft.kept = photoDraft.kept.filter((id) => id !== value);
+      photoDraft.removed.push(value);
+    } else {
+      const [removed] = photoDraft.added.splice(Number(value), 1);
+      if (removed) URL.revokeObjectURL(removed.preview);
+    }
+    renderPhotoGrid();
+  });
+  renderPhotoGrid();
+}
+
 function renderSessionForm(record, session = {}) {
   elements.formContent.innerHTML = `<p class="form-section-title">${escapeHtml(record.title)} <span>· 수행 회차</span></p>
     <div class="form-grid">
@@ -415,8 +513,16 @@ function renderSessionForm(record, session = {}) {
       <label class="field full"><span>받은 질문</span><textarea name="questions" rows="3" maxlength="20000" placeholder="관람객에게 받은 질문을 기록해 보세요."></textarea></label>
       <label class="field full"><span>특이 사항</span><textarea name="notes" rows="3" maxlength="20000" placeholder="기억에 남는 상황이나 진행 중 참고할 점"></textarea></label>
       <label class="field full"><span>이번 수행의 감상</span><textarea name="impression" rows="4" maxlength="20000" placeholder="오늘 도슨트를 마친 뒤의 생각을 적어 보세요."></textarea></label>
+      <div class="field full photo-field">
+        <span>수행 사진 <small class="photo-count"></small></span>
+        <div class="photo-grid"></div>
+        <label class="button button-quiet photo-pick">＋ 사진 추가<input type="file" accept="image/jpeg,image/png,image/webp" multiple hidden /></label>
+        <p class="form-hint">JPG·PNG·WEBP, 한 장 10MB 이하, 회차당 ${MAX_PHOTOS}장까지. 저장할 때 긴 변 1600px로 줄이고 위치 정보는 지워 내 구글 드라이브에 올려요.</p>
+      </div>
     </div>`;
   SESSION_FIELDS.forEach((name) => { elements.form.elements[name].value = session[name] ?? ""; });
+  resetPhotoDraft(session.photos || []);
+  setupPhotoPicker();
   const totalOutput = elements.formContent.querySelector(".participants-total");
   const updateTotal = () => {
     const values = AUDIENCES.map(([key]) => elements.form.elements[key].value.trim()).filter(Boolean);
@@ -838,10 +944,29 @@ async function saveSession() {
   }
   const sessions = [...(records[index].sessions || [])];
   const session = collectSessionData(state.editingSessionIndex === null ? {} : sessions[state.editingSessionIndex]);
+  const uploaded = [];
+  if (photoDraft.added.length) {
+    setSaving(true);
+    elements.submitButton.textContent = "사진 올리는 중…";
+    try {
+      for (const item of photoDraft.added) uploaded.push(await uploadPhoto(item.file));
+    } catch (error) {
+      trashPhotos(uploaded);
+      setSaving(false);
+      if (state.auth) window.alert(error.message);
+      return;
+    }
+  }
+  session.photos = [...photoDraft.kept, ...uploaded];
   if (state.editingSessionIndex === null) sessions.push(session);
   else sessions[state.editingSessionIndex] = session;
   records[index] = { ...records[index], sessions: sortSessions(sessions) };
-  if (!await commitRecords({ ...state.records, [tab]: records })) return;
+  if (!await commitRecords({ ...state.records, [tab]: records })) {
+    trashPhotos(uploaded);
+    return;
+  }
+  trashPhotos(photoDraft.removed);
+  resetPhotoDraft();
   state.editingId = null;
   state.editingSessionIndex = null;
   elements.dialog.close();
@@ -853,12 +978,14 @@ async function deleteSession(sessionIndex) {
   const session = record?.sessions?.[sessionIndex];
   if (state.saving || !session) return;
   const when = formattedDate(session.performedAt, { year: "numeric", month: "long", day: "numeric" }) || "날짜 미입력";
-  if (!window.confirm(`${sessionIndex + 1}회차(${when}) 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.`)) return;
+  const photoNote = (session.photos || []).length ? ` 이 회차의 사진 ${session.photos.length}장은 드라이브 휴지통으로 옮겨져요.` : "";
+  if (!window.confirm(`${sessionIndex + 1}회차(${when}) 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.${photoNote}`)) return;
   const tab = state.tab;
   const records = state.records[tab].map((item) => (item.id === record.id
     ? { ...item, sessions: item.sessions.filter((_, index) => index !== sessionIndex) }
     : item));
   if (!await commitRecords({ ...state.records, [tab]: records })) return;
+  trashPhotos(session.photos || []);
   render();
 }
 
@@ -894,10 +1021,13 @@ async function saveForm(event) {
 
 async function deleteSelected() {
   const record = selectedRecord();
-  if (state.saving || !record || !window.confirm(`"${record.title}" 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.`)) return;
+  const photos = (record?.sessions || []).flatMap((session) => session.photos || []);
+  const photoNote = photos.length ? ` 수행 사진 ${photos.length}장은 드라이브 휴지통으로 옮겨져요.` : "";
+  if (state.saving || !record || !window.confirm(`"${record.title}" 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.${photoNote}`)) return;
   const tab = state.tab;
   const remaining = state.records[tab].filter((item) => item.id !== record.id);
   if (!await commitRecords({ ...state.records, [tab]: remaining })) return;
+  trashPhotos(photos);
   state.selected[tab] = remaining[0]?.id || null;
   render();
 }

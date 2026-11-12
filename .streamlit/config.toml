@@ -15,3 +15,6 @@ secondaryBackgroundColor = "#1f2026"
 
 [client]
 toolbarMode = "minimal"
+
+[server]
+maxUploadSize = 10  # 수행 사진 한 장 한도(MB). journal_core.MAX_UPLOAD_BYTES와 같게 둔다

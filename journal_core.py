@@ -4,6 +4,7 @@
 - Display helpers (dates, participants, exhibition periods, "라벨: 값" facts) used by the Streamlit UI;
   they mirror the behaviour of app.js so both front ends show the same text.
 """
+import io
 import re
 from datetime import date, datetime
 
@@ -14,6 +15,47 @@ AUDIENCE_LABELS = (("adults", "성인"), ("teens", "청소년"), ("children", "�
 RECORD_TEXT_FIELDS = ("title", "schedule", "space", "detail", "visitDate", "evaluation", "impression", "posterUrl")
 SESSION_TEXT_FIELDS = ("performedAt", "questions", "notes", "impression")
 MAX_TEXT = 20000
+
+# Session photos (same rules as miniPJT's visit photos)
+MAX_PHOTOS = 5
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_SIDE = 1600
+JPEG_QUALITY = 85
+PHOTO_TYPES = ("jpg", "jpeg", "png", "webp")
+PHOTO_ID = re.compile(r"^[A-Za-z0-9_-]{10,200}$")
+
+
+class PhotoError(ValueError):
+    """User-facing message about an uploaded photo."""
+
+
+def prepare_photo(data):
+    """Uploaded bytes -> JPEG bytes: long side <= MAX_SIDE, rotated upright, EXIF (location etc.) dropped."""
+    if not data:
+        raise PhotoError("사진 파일을 읽지 못했습니다.")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise PhotoError("사진 한 장은 10MB 이하로 올려 주세요.")
+    from PIL import Image, ImageOps, UnidentifiedImageError
+
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            image = ImageOps.exif_transpose(image)
+            if image.mode not in ("RGB", "L"):
+                image = image.convert("RGB")
+            image.thumbnail((MAX_SIDE, MAX_SIDE))
+            out = io.BytesIO()
+            image.save(out, "JPEG", quality=JPEG_QUALITY, optimize=True)
+            return out.getvalue()
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError):
+        raise PhotoError("JPG·PNG·WEBP 사진만 올릴 수 있습니다.") from None
+
+
+def valid_photo_id(value):
+    return isinstance(value, str) and bool(PHOTO_ID.match(value))
+
+
+def session_photo_ids(record):
+    return [photo for session in record.get("sessions") or [] for photo in session.get("photos") or []]
 
 
 # ---------- validation ----------
@@ -74,6 +116,10 @@ def validate_records(value):
                     if not isinstance(field_value, str) or len(field_value) > MAX_TEXT:
                         raise ValueError("Docent 수행 회차 입력값이 올바르지 않습니다.")
                     clean_session[field] = field_value
+                photos = session.get("photos", [])
+                if not isinstance(photos, list) or len(photos) > MAX_PHOTOS or not all(map(valid_photo_id, photos)):
+                    raise ValueError(f"회차 사진은 {MAX_PHOTOS}장까지 올릴 수 있습니다.")
+                clean_session["photos"] = list(dict.fromkeys(photos))
                 clean["sessions"].append(clean_session)
         else:
             listened = item.get("listened", False)

@@ -23,11 +23,11 @@ class JournalSheetsTests(unittest.TestCase):
                     {"performedAt": "2026-11-12T10:30", "participants": 12,
                      "adults": 7, "teens": 3, "children": 2,
                      "questions": "작가의 의도는?", "notes": "질의응답 진행",
-                     "impression": "즐거운 대화"},
+                     "impression": "즐거운 대화", "photos": ["1AbCdEfGhIjK", "2LmNoPqRsTuV"]},
                     # recorded before the breakdown existed: total only
                     {"performedAt": "2026-11-13T14:00", "participants": 8,
                      "adults": "", "teens": "", "children": "",
-                     "questions": "", "notes": "", "impression": "다시 진행"},
+                     "questions": "", "notes": "", "impression": "다시 진행", "photos": []},
                 ],
             },
             {
@@ -54,6 +54,7 @@ class JournalSheetsTests(unittest.TestCase):
         self.assertEqual([row[5] for row in docent_rows], [1, 2])
         self.assertEqual(docent_rows[0][7], 12)
         self.assertEqual(docent_rows[0][11:14], [7, 3, 2])
+        self.assertEqual(docent_rows[0][15], "1AbCdEfGhIjK,2LmNoPqRsTuV")
         self.assertEqual(visit_rows[0][5], "예")
         self.assertEqual(
             google_sheets._decode_docent([list(google_sheets.DOCENT_HEADERS), *docent_rows]),

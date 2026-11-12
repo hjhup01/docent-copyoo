@@ -252,6 +252,59 @@ def save_journal(user, next_journal):
     return None
 
 
+# ---------- session photos (user's Google Drive) ----------
+
+def photo_bytes(file_id):
+    """Photo bytes for display, cached per browser session (photos are private, so never shared)."""
+    cache = st.session_state.setdefault("photo_cache", {})
+    if file_id not in cache:
+        user = current_user()
+        if not user:
+            return None
+        try:
+            cache[file_id] = sheets(user).download_photo(file_id)
+        except GoogleError:
+            return None
+    return cache[file_id]
+
+
+def upload_photos(user, files):
+    """Shrink and upload picked files; returns their Drive IDs. Raises PhotoError / GoogleError."""
+    client = sheets(user)
+    folder = st.session_state.get("photo_folder_id") or client.find_or_create_photo_folder()
+    st.session_state["photo_folder_id"] = folder
+    uploaded = []
+    try:
+        for number, file in enumerate(files, 1):
+            data = core.prepare_photo(file.getvalue())
+            name = datetime.now().strftime(f"docent-%Y%m%d-%H%M%S-{number}.jpg")
+            file_id = client.upload_photo(folder, name, data)
+            st.session_state.setdefault("photo_cache", {})[file_id] = data
+            uploaded.append(file_id)
+    except (core.PhotoError, GoogleError):
+        trash_photos(user, uploaded)
+        raise
+    return uploaded
+
+
+def trash_photos(user, ids):
+    """Best effort: move removed photos to the Drive trash (recoverable for 30 days)."""
+    client = sheets(user)
+    for file_id in ids:
+        try:
+            client.trash_photo(file_id)
+        except GoogleError:
+            pass
+
+
+def render_photo_gallery(photos, width=110):
+    images = [data for data in map(photo_bytes, photos) if data]
+    if images:
+        st.image(images, width=width)
+    if len(images) < len(photos):
+        st.caption(f"사진 {len(photos) - len(images)}장을 불러오지 못했어요.")
+
+
 def replace_record(kind, record):
     records = [record if item["id"] == record["id"] else item for item in journal()[kind]]
     if not any(item["id"] == record["id"] for item in journal()[kind]):
@@ -431,6 +484,8 @@ def render_sessions(record):
                 open_dialog("confirm-session", kind="docent", record_id=record["id"], index=index)
             st.markdown(f'<div class="people"><span>참여 인원</span>{esc(core.participants_text(session))}</div>{notes_html(session)}',
                         unsafe_allow_html=True)
+            if session.get("photos"):
+                render_photo_gallery(session["photos"])
 
 
 # ---------- dialogs ----------
@@ -467,6 +522,10 @@ def open_dialog(name, **params):
             ss[f"sf_{key}"] = session.get(key) if core.has_count(session.get(key)) else None
         for key in ("questions", "notes", "impression"):
             ss[f"sf_{key}"] = session.get(key, "")
+        ss["sf_photos"] = list(session.get("photos") or [])
+        ss["sf_photos_removed"] = []
+        ss["sf_photo_confirm"] = None
+        ss["sf_upload_key"] = ss.get("sf_upload_key", 0) + 1  # fresh file uploader each time
 
 
 def close_dialog():
@@ -635,6 +694,45 @@ def record_dialog(user, kind, record_id):
         st.rerun()
 
 
+def remove_draft_photo(file_id):
+    """on_click after the confirmation: drop the photo from the draft (trashed only when saved)."""
+    ss = st.session_state
+    ss["sf_photos"] = [p for p in ss["sf_photos"] if p != file_id]
+    ss["sf_photos_removed"] = [*ss.get("sf_photos_removed", []), file_id]
+    ss["sf_photo_confirm"] = None
+
+
+def render_photo_editor():
+    """Photos of the session being edited: saved ones (removable after a confirmation) + new uploads."""
+    ss = st.session_state
+    st.markdown(f"**수행 사진** <small style='color:{MUTED}'>({len(ss['sf_photos'])}/{core.MAX_PHOTOS})</small>",
+                unsafe_allow_html=True)
+    if ss["sf_photos"]:
+        columns = st.columns(core.MAX_PHOTOS)
+        for column, file_id in zip(columns, list(ss["sf_photos"])):
+            data = photo_bytes(file_id)
+            if data:
+                column.image(data, width="stretch")
+            else:
+                column.caption("불러오지 못함")
+            column.button("빼기", key=f"sf-photo-remove-{file_id}", use_container_width=True,
+                          on_click=ss.__setitem__, args=("sf_photo_confirm", file_id))
+    pending = ss.get("sf_photo_confirm")
+    if pending in ss["sf_photos"]:
+        st.warning("이 사진을 뺄까요? ‘저장’을 누르면 드라이브 휴지통으로 옮겨져요(30일 동안 되살릴 수 있어요).")
+        keep, remove = st.columns([3, 1])
+        keep.button("취소", key="sf-photo-keep", on_click=ss.__setitem__, args=("sf_photo_confirm", None))
+        remove.button("사진 빼기", key="sf-photo-confirm", type="primary", use_container_width=True,
+                      on_click=remove_draft_photo, args=(pending,))
+    room = core.MAX_PHOTOS - len(ss["sf_photos"])
+    files = st.file_uploader(
+        f"사진 추가 (JPG·PNG·WEBP, 한 장 10MB 이하, {max(room, 0)}장 더 올릴 수 있어요)",
+        type=list(core.PHOTO_TYPES), accept_multiple_files=True, key=f"sf-upload-{ss.get('sf_upload_key', 0)}",
+        disabled=room <= 0)
+    st.caption("저장할 때 긴 변 1600px로 줄이고 위치 정보는 지워 내 구글 드라이브의 ‘나의 전시 기록 사진’ 폴더에 올려요.")
+    return list(files or [])
+
+
 def session_dialog(user, record_id, index):
     ss = st.session_state
     record = find_record("docent", record_id)
@@ -658,6 +756,7 @@ def session_dialog(user, record_id, index):
     st.text_area("받은 질문", key="sf_questions", height=80)
     st.text_area("특이 사항", key="sf_notes", height=80)
     st.text_area("이번 수행의 감상", key="sf_impression", height=100)
+    new_files = render_photo_editor()
     cancel, save = st.columns([3, 1])
     if cancel.button("취소", key="sf_cancel"):
         close_dialog()
@@ -672,6 +771,18 @@ def session_dialog(user, record_id, index):
             **{key: ss.get(f"sf_{key}", "").strip() for key in ("questions", "notes", "impression")},
         }
         session["participants"] = sum(int(v) for v in filled) if filled else previous.get("participants", "")
+        if len(ss["sf_photos"]) + len(new_files) > core.MAX_PHOTOS:
+            st.error(f"회차당 사진은 {core.MAX_PHOTOS}장까지 올릴 수 있어요.")
+            return
+        uploaded = []
+        if new_files:
+            try:
+                with st.spinner("사진을 올리는 중…"):
+                    uploaded = upload_photos(user, new_files)
+            except (core.PhotoError, GoogleError) as error:
+                st.error(str(error))
+                return
+        session["photos"] = [*ss["sf_photos"], *uploaded]
         sessions = list(record.get("sessions") or [])
         if index is None:
             sessions.append(session)
@@ -679,8 +790,10 @@ def session_dialog(user, record_id, index):
             sessions[index] = session
         error = save_journal(user, replace_record("docent", {**record, "sessions": core.sort_sessions(sessions)}))
         if error:
+            trash_photos(user, uploaded)
             st.error(error)
             return
+        trash_photos(user, ss.get("sf_photos_removed") or [])
         close_dialog()
         st.toast("회차를 저장했어요.", icon="✅")
         st.rerun()
@@ -692,11 +805,13 @@ def confirm_dialog(user, current):
         close_dialog()
         st.rerun()
     index = current.get("index")
+    photos = core.session_photo_ids(record) if index is None else list(record["sessions"][index].get("photos") or [])
+    photo_note = f" 사진 {len(photos)}장은 드라이브 휴지통으로 옮겨져요." if photos else ""
     if index is None:
-        st.write(f"‘{record['title']}’ 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.")
+        st.write(f"‘{record['title']}’ 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.{photo_note}")
     else:
         when = core.korean_date(record["sessions"][index].get("performedAt")) or "날짜 미입력"
-        st.write(f"{index + 1}회차({when}) 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.")
+        st.write(f"{index + 1}회차({when}) 기록을 삭제할까요? 삭제한 기록은 복구할 수 없습니다.{photo_note}")
     cancel, delete = st.columns([3, 1])
     if cancel.button("취소", key="cf_cancel"):
         close_dialog()
@@ -711,6 +826,7 @@ def confirm_dialog(user, current):
         if error:
             st.error(error)
             return
+        trash_photos(user, photos)
         if index is None:
             remaining = journal()[kind]
             select(kind, remaining[0]["id"] if remaining else None)

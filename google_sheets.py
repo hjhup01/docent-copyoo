@@ -19,11 +19,16 @@ DOCENT_HEADERS = (
     "수행 날짜와 시간", "참여 인원", "받은 질문", "특이 사항", "수행 감상",
     # Appended (not inserted) so sheets written by older versions keep their layout.
     # "참여 인원" above holds the total.
-    "성인", "청소년", "어린이", "포스터",
+    "성인", "청소년", "어린이", "포스터", "사진",
 )
 # Per-audience participant counts: (session key, column index in DOCENT_HEADERS).
 AUDIENCE_COLUMNS = (("adults", 11), ("teens", 12), ("children", 13))
 DOCENT_POSTER_COLUMN = 14
+DOCENT_PHOTO_COLUMN = 15  # comma-separated Google Drive file IDs of the session's photos
+UPLOAD_URL = "https://www.googleapis.com/upload/drive/v3/files"
+PHOTO_FOLDER_TITLE = "나의 전시 기록 사진"
+FOLDER_MIME = "application/vnd.google-apps.folder"
+UPLOAD_TIMEOUT_SECONDS = 30
 VISIT_HEADERS = (
     "기록 ID", "전시 제목", "전시 공간", "방문일", "전시 상세 정보",
     "Docent 설명 여부", "Docent 설명 평가", "나의 감상", "포스터",
@@ -84,24 +89,33 @@ def _http_error(error):
     return GoogleError("Google 시트에 접근하지 못했습니다. 권한과 시트 설정을 확인해 주세요." + detail)
 
 
-def _request_json(url, method="GET", token=None, data=None, params=None):
+def _request(url, method="GET", token=None, body=None, headers=None, params=None, timeout=TIMEOUT_SECONDS):
+    """Send a request and return the raw response body (bytes)."""
     if params:
         url += ("&" if "?" in url else "?") + urlencode(params)
-    body = json.dumps(data).encode("utf-8") if data is not None else None
-    headers = {"Accept": "application/json"}
+    headers = dict(headers or {})
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    if body is not None:
-        headers["Content-Type"] = "application/json"
     request = Request(url, data=body, headers=headers, method=method)
     try:
-        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            payload = response.read()
-            return json.loads(payload) if payload else {}
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
     except HTTPError as error:
         raise _http_error(error) from None
-    except (URLError, TimeoutError, OSError, ValueError):
+    except (URLError, TimeoutError, OSError):
         raise GoogleError("Google 서비스에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 시도해 주세요.") from None
+
+
+def _request_json(url, method="GET", token=None, data=None, params=None):
+    body = json.dumps(data).encode("utf-8") if data is not None else None
+    headers = {"Accept": "application/json"}
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    payload = _request(url, method, token, body, headers, params)
+    try:
+        return json.loads(payload) if payload else {}
+    except ValueError:
+        raise GoogleError("Google 서비스 응답을 해석하지 못했습니다.") from None
 
 
 def make_auth_url(client_id, redirect_uri, state):
@@ -252,6 +266,49 @@ class JournalSheets:
         )
         return result.get("values") or []
 
+    # ---------- session photos: '나의 전시 기록 사진' folder in the user's Drive ----------
+
+    def find_or_create_photo_folder(self):
+        found = self._api(DRIVE_FILES_URL, params={
+            "q": f"name = '{PHOTO_FOLDER_TITLE}' and mimeType = '{FOLDER_MIME}' and trashed = false",
+            "spaces": "drive", "fields": "files(id)", "pageSize": 10,
+        })
+        files = found.get("files") or []
+        if files:
+            return files[0]["id"]
+        created = self._api(DRIVE_FILES_URL, method="POST", data={"name": PHOTO_FOLDER_TITLE, "mimeType": FOLDER_MIME},
+                            params={"fields": "id"})
+        if not created.get("id"):
+            raise GoogleError("사진 폴더를 만들지 못했습니다.")
+        return created["id"]
+
+    def upload_photo(self, folder_id, name, data, mime="image/jpeg"):
+        """Upload one photo into the folder (multipart upload) and return its file ID."""
+        boundary = "exhibition-journal-photo-boundary"
+        meta = json.dumps({"name": name, "parents": [folder_id], "mimeType": mime}).encode("utf-8")
+        body = (f"--{boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n".encode() + meta
+                + f"\r\n--{boundary}\r\nContent-Type: {mime}\r\n\r\n".encode() + data
+                + f"\r\n--{boundary}--".encode())
+        payload = _request(UPLOAD_URL, "POST", self.access_token, body,
+                           {"Content-Type": f"multipart/related; boundary={boundary}", "Accept": "application/json"},
+                           {"uploadType": "multipart", "fields": "id"}, UPLOAD_TIMEOUT_SECONDS)
+        try:
+            file_id = json.loads(payload).get("id")
+        except ValueError:
+            file_id = None
+        if not file_id:
+            raise GoogleError("사진을 올리지 못했습니다. 잠시 후 다시 시도해 주세요.")
+        return file_id
+
+    def download_photo(self, file_id):
+        return _request(f"{DRIVE_FILES_URL}/{quote(file_id, safe='')}", token=self.access_token,
+                        params={"alt": "media"}, timeout=UPLOAD_TIMEOUT_SECONDS)
+
+    def trash_photo(self, file_id):
+        """Move a photo to the Drive trash (recoverable for 30 days)."""
+        self._api(f"{DRIVE_FILES_URL}/{quote(file_id, safe='')}", method="PATCH", data={"trashed": True},
+                  params={"fields": "id"})
+
     def _write_rows(self, spreadsheet_id, title, headers, rows):
         self._replace_sheets(spreadsheet_id, ((title, headers, rows),))
 
@@ -273,6 +330,7 @@ def build_rows(records):
                     session.get("impression", ""),
                     *(session.get(key, "") for key, _ in AUDIENCE_COLUMNS),
                     record.get("posterUrl", ""),
+                    ",".join(session.get("photos") or []),
                 ])
         else:
             visit_rows.append([
@@ -330,6 +388,7 @@ def _decode_docent(values):
                 "notes": _cell(row, 9),
                 "impression": _cell(row, 10),
             }
+            session["photos"] = [p for p in _cell(row, DOCENT_PHOTO_COLUMN).split(",") if p.strip()]
             for key, index in AUDIENCE_COLUMNS:
                 session[key] = _count(_cell(row, index))
             record["sessions"].append(session)

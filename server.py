@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from google_sheets import AuthExpired, GoogleError, JournalSheets, exchange_code, make_auth_url
+from journal_core import MAX_UPLOAD_BYTES, PhotoError, prepare_photo, valid_photo_id
 from journal_core import validate_records as _validate_records
 from public_data import ExhibitionSearch, InvalidSearch, PublicDataError
 
@@ -21,12 +22,13 @@ ROOT = Path(__file__).resolve().parent
 COOKIE_NAME = "exhibition_journal_session"
 SESSION_MAX_AGE = 3600
 MAX_REQUEST_SIZE = 2_000_000
+PHOTO_PREFIX = "/api/photos/"
 SESSIONS = {}
 PENDING_STATES = {}
 LOCK = threading.Lock()
 EXPIRED_COOKIE = f"{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
 CONTENT_SECURITY_POLICY = (
-    "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data: http: https:; "
+    "default-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self' data: blob: http: https:; "
     "style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
 )
@@ -114,13 +116,14 @@ class JournalHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         print(f"{self.log_date_time_string()} {self.address_string()} {fmt % args}")
 
-    def _send(self, status, body=b"", content_type="application/json; charset=utf-8", headers=None):
+    def _send(self, status, body=b"", content_type="application/json; charset=utf-8", headers=None,
+              cache="no-store"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("Referrer-Policy", "same-origin")
         if content_type.startswith("text/html"):
             self.send_header("Content-Security-Policy", CONTENT_SECURITY_POLICY)
@@ -245,6 +248,9 @@ class JournalHandler(BaseHTTPRequestHandler):
             except GoogleError as error:
                 self._json(502, {"error": str(error)})
             return
+        if parsed.path.startswith(PHOTO_PREFIX):
+            self._photo_download(parsed.path[len(PHOTO_PREFIX):])
+            return
         if parsed.path in ("/api/exhibitions", "/api/exhibitions/detail"):
             self._exhibition_lookup(parsed)
             return
@@ -331,6 +337,9 @@ class JournalHandler(BaseHTTPRequestHandler):
                     SESSIONS.pop(session_id, None)
             self._json(200, {"ok": True}, headers=[("Set-Cookie", EXPIRED_COOKIE)])
             return
+        if parsed.path == "/api/photos" and self.command == "POST":
+            self._photo_upload(session)
+            return
         if parsed.path != "/api/records":
             self._send(404, b"Not found", "text/plain; charset=utf-8")
             return
@@ -352,6 +361,85 @@ class JournalHandler(BaseHTTPRequestHandler):
             self._json(401, {"error": str(error)})
         except GoogleError as error:
             self._json(502, {"error": str(error)})
+
+    # ---------- session photos (stored in the user's Google Drive) ----------
+
+    def _photo_client(self, session):
+        client = JournalSheets(session["google"]["access_token"])
+        folder_id = session.get("photo_folder_id")
+        if not folder_id:
+            folder_id = client.find_or_create_photo_folder()
+            with LOCK:
+                session["photo_folder_id"] = folder_id
+        return client, folder_id
+
+    def _google_failure(self, error):
+        if isinstance(error, AuthExpired):
+            self._expire_session()
+            self._json(401, {"error": str(error)})
+        else:
+            self._json(502, {"error": str(error)})
+
+    def _photo_upload(self, session):
+        if not session:
+            self._json(401, {"error": "Google에 로그인해 주세요."})
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > MAX_UPLOAD_BYTES:
+            self._json(400, {"error": "사진 한 장은 10MB 이하로 올려 주세요."})
+            return
+        try:
+            data = prepare_photo(self.rfile.read(length))
+        except PhotoError as error:
+            self._json(400, {"error": str(error)})
+            return
+        try:
+            client, folder_id = self._photo_client(session)
+            name = time.strftime("docent-%Y%m%d-%H%M%S.jpg")
+            self._json(200, {"id": client.upload_photo(folder_id, name, data)})
+        except GoogleError as error:
+            self._google_failure(error)
+
+    def _photo_download(self, file_id):
+        _, session = _session_for(self)
+        if not session:
+            self._json(401, {"error": "Google에 로그인해 주세요."})
+            return
+        if not valid_photo_id(file_id):
+            self._send(404, b"Not found", "text/plain; charset=utf-8")
+            return
+        try:
+            data = JournalSheets(session["google"]["access_token"]).download_photo(file_id)
+        except GoogleError as error:
+            self._google_failure(error)
+            return
+        # Photos are private: only the browser of the signed-in user may keep them for a while.
+        self._send(200, data, "image/jpeg", cache="private, max-age=3600")
+
+    def do_DELETE(self):
+        self._handle_safely(self._do_delete)
+
+    def _do_delete(self):
+        parsed = urlsplit(self.path)
+        if not self._check_origin():
+            self._json(403, {"error": "출처가 확인되지 않은 요청입니다."})
+            return
+        _, session = _session_for(self)
+        file_id = parsed.path[len(PHOTO_PREFIX):] if parsed.path.startswith(PHOTO_PREFIX) else ""
+        if not valid_photo_id(file_id):
+            self._send(404, b"Not found", "text/plain; charset=utf-8")
+            return
+        if not session:
+            self._json(401, {"error": "Google에 로그인해 주세요."})
+            return
+        try:
+            JournalSheets(session["google"]["access_token"]).trash_photo(file_id)
+            self._json(200, {"ok": True})
+        except GoogleError as error:
+            self._google_failure(error)
 
     def _expire_session(self):
         session_id, _ = _session_for(self)
