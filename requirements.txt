@@ -1,3 +1,5 @@
 # Streamlit Cloud 배포용. miniPJT와 같은 버전으로 고정한다.
 streamlit==1.67.0
+# st.login(구글 로그인)에 필요: Authlib과 그 통신 라이브러리 httpx (streamlit[auth]에 해당)
 Authlib==1.9.5
+httpx==0.28.1

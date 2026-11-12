@@ -150,5 +150,17 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertNotIn("d2", [r["id"] for r in self.store()["records"]])
 
 
+
+class DeploymentRequirementsTests(unittest.TestCase):
+    def test_login_dependencies_are_listed(self):
+        # Streamlit Cloud installs only requirements.txt. st.login needs Authlib and
+        # httpx (Streamlit's "auth" extra); without httpx the login button returns
+        # "Internal server error".
+        listed = {line.split("==")[0].strip().lower()
+                  for line in (Path(ROOT) / "requirements.txt").read_text(encoding="utf-8").splitlines()
+                  if line.strip() and not line.startswith("#")}
+        self.assertTrue({"streamlit", "authlib", "httpx"} <= listed)
+
+
 if __name__ == "__main__":
     unittest.main()
