@@ -69,6 +69,10 @@ def _http_error(error):
             "Google 드라이브 파일 권한이 없습니다. 로그아웃한 뒤 다시 로그인하고, 구글 동의 화면에서 "
             "‘Google Drive 파일’ 항목을 체크해 허용해 주세요. 동의 화면에 그 항목이 보이지 않으면 "
             "Streamlit Secrets의 [auth.client_kwargs] scope에 drive.file이 들어 있는지 확인해 주세요.")
+    if reasons & {"domainPolicy"} or "domain administrators" in message.lower():
+        return GoogleError(
+            "이 구글 계정은 회사·학교 관리자 정책으로 외부 앱의 드라이브 사용이 막혀 있습니다. "
+            "개인 Gmail 계정으로 로그인하거나 관리자에게 허용을 요청해 주세요.")
     if reasons & {"SERVICE_DISABLED", "accessNotConfigured"} or "has not been used in project" in message:
         api = "Google Drive API" if "drive" in message.lower() else "Google Sheets API"
         return GoogleError(f"구글 클라우드 프로젝트에서 {api}가 사용 설정되지 않았습니다. 콘솔의 API 라이브러리에서 사용 설정해 주세요.")

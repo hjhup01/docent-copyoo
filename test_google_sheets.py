@@ -155,6 +155,11 @@ class GoogleErrorMessageTests(unittest.TestCase):
                           "details": [{"reason": "SERVICE_DISABLED"}]}}
         self.assertIn("Google Sheets API", str(google_sheets._http_error(self._error(403, body))))
 
+    def test_workspace_admin_block_is_explained(self):
+        body = {"error": {"code": 403, "message": "The domain administrators have disabled Drive apps.",
+                          "errors": [{"reason": "domainPolicy"}]}}
+        self.assertIn("관리자 정책", str(google_sheets._http_error(self._error(403, body))))
+
     def test_expired_token_and_unknown_errors(self):
         self.assertIsInstance(google_sheets._http_error(self._error(401, {})), google_sheets.AuthExpired)
         unknown = google_sheets._http_error(self._error(500, {"error": {"status": "INTERNAL"}}))
