@@ -158,6 +158,15 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertTrue(any("전시 제목" in error.value for error in at.error))
         self.assertEqual(self.store()["writes"], 0)
 
+    def test_sessions_are_listed_first_to_last(self):
+        at = self.app()
+        at.button(key="add-session").click().run()
+        at.date_input(key="sf_date").set_value(__import__("datetime").date(2026, 11, 20)).run()
+        at.button(key="sf_save").click().run()
+        labels = [e.label for e in at.expander]
+        self.assertEqual([label.split("**")[1] for label in labels], ["1회차", "2회차"])  # 1회차 on top
+        self.assertIn("2026년 10월 3일", labels[0])
+
     def test_add_session_with_audience_breakdown(self):
         at = self.app()
         at.button(key="add-session").click().run()

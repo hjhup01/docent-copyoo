@@ -482,7 +482,7 @@ def render_sessions(record):
     if not sessions:
         st.markdown('<div class="empty-note">아직 수행 회차가 없습니다. ＋ 회차 추가로 도슨트를 진행한 날의 기록을 남겨 보세요.</div>',
                     unsafe_allow_html=True)
-    for index in reversed(range(len(sessions))):
+    for index in range(len(sessions)):  # oldest first: 1회차 on top
         session = sessions[index]
         key = f"session-open-{record['id']}-{index}"
         with st.expander(session_summary(index, session), key=key, on_change="rerun"):

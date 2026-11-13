@@ -386,8 +386,9 @@ function sessionKey(record, session) {
 }
 
 function renderDocentDetail(record) {
-  // Sessions are stored oldest-first, so the array index is the session number.
-  const sessions = (record.sessions || []).map((session, index) => ({ session, index })).reverse();
+  // Sessions are stored oldest-first, so the array index is the session number;
+  // they are listed in that order (1회차 on top).
+  const sessions = (record.sessions || []).map((session, index) => ({ session, index }));
   const disabled = state.saving ? " disabled" : "";
   const counted = (record.sessions || []).map(sessionParticipants).filter((value) => value !== null);
   const summary = sessions.length
