@@ -198,6 +198,12 @@ def app_with_photos(root):
     app.main()
 
 
+def open_session(at, record_id="d1", index=0):
+    """Sessions start collapsed; open one like a click on its summary."""
+    at.session_state[f"session-open-{record_id}-{index}"] = True
+    return at.run()
+
+
 class StreamlitPhotoTests(unittest.TestCase):
     def setUp(self):
         sys.modules.pop("streamlit_app", None)
@@ -206,13 +212,14 @@ class StreamlitPhotoTests(unittest.TestCase):
         return sys.modules["streamlit_app"]._photo_store
 
     def test_detail_shows_session_photos(self):
-        at = AppTest.from_function(app_with_photos, args=(ROOT,), default_timeout=20).run()
+        at = open_session(AppTest.from_function(app_with_photos, args=(ROOT,), default_timeout=20).run())
         self.assertFalse(at.exception)
+        self.assertIn("📷 2장", at.expander[0].label)        # photo count in the collapsed summary
         self.assertEqual(len(at.get("image")), 1)          # one gallery
         self.assertEqual(len(at.get("image")[0].proto.imgs), 2)
 
     def test_removing_photo_needs_confirmation_and_trashes_on_save(self):
-        at = AppTest.from_function(app_with_photos, args=(ROOT,), default_timeout=20).run()
+        at = open_session(AppTest.from_function(app_with_photos, args=(ROOT,), default_timeout=20).run())
         at.button(key="edit-session-0").click().run()
         at.button(key=f"sf-photo-remove-{PHOTO_A}").click().run()
         self.assertTrue(any("이 사진을 뺄까요" in w.value for w in at.warning))
@@ -227,7 +234,7 @@ class StreamlitPhotoTests(unittest.TestCase):
         self.assertEqual(self.store()["trashed"], [PHOTO_A])
 
     def test_deleting_session_trashes_its_photos(self):
-        at = AppTest.from_function(app_with_photos, args=(ROOT,), default_timeout=20).run()
+        at = open_session(AppTest.from_function(app_with_photos, args=(ROOT,), default_timeout=20).run())
         at.button(key="del-session-0").click().run()
         self.assertTrue(any("사진 2장" in m.value for m in at.markdown))
         at.button(key="cf_delete").click().run()

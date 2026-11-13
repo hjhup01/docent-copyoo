@@ -11,6 +11,7 @@ const state = {
   // of the selected exhibition.
   dialogMode: "record",
   editingSessionIndex: null,
+  openSessions: new Set(),
   auth: null,
   authChecked: false,
   loading: false,
@@ -379,6 +380,11 @@ function sessionNotes(session) {
   return `<dl class="session-notes">${notes.map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")}</dl>`;
 }
 
+// Which sessions are open survives re-rendering (keyed by exhibition + session time).
+function sessionKey(record, session) {
+  return `${record.id}|${session.performedAt || ""}`;
+}
+
 function renderDocentDetail(record) {
   // Sessions are stored oldest-first, so the array index is the session number.
   const sessions = (record.sessions || []).map((session, index) => ({ session, index })).reverse();
@@ -396,13 +402,22 @@ function renderDocentDetail(record) {
     ${aboutSection(record.detail)}
     <section class="detail-section">
       <div class="section-title"><h3>수행 회차 <span>총 ${sessions.length}회</span></h3><button class="add-session" type="button"${disabled}>＋ 회차 추가</button></div>
-      ${sessions.length ? sessions.map(({ session, index }) => `<article class="session-detail">
-        <div class="session-detail-head"><div><strong>${index + 1}회차</strong><span>${escapeHtml(formattedDate(session.performedAt, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }) || "날짜 미입력")}</span></div>
-          <div class="detail-actions"><button class="text-button edit-session" type="button" data-index="${index}"${disabled}>수정</button><button class="text-button danger delete-session" type="button" data-index="${index}"${disabled}>삭제</button></div></div>
-        <p class="session-people"><span>참여 인원</span>${escapeHtml(participantsText(session))}</p>
-        ${sessionNotes(session)}
-        ${sessionPhotosHtml(session)}
-      </article>`).join("") : emptyState("", "아직 수행 회차가 없습니다", "위의 ＋ 회차 추가 버튼으로 도슨트를 진행한 날의 기록을 남겨 보세요.")}
+      ${sessions.length ? sessions.map(({ session, index }) => {
+        const total = sessionParticipants(session);
+        const photos = (session.photos || []).length;
+        const open = state.openSessions.has(sessionKey(record, session)) ? " open" : "";
+        // Collapsed by default: a one-line summary; details (and photo downloads) only when opened.
+        return `<details class="session-detail" data-key="${escapeHtml(sessionKey(record, session))}"${open}>
+        <summary class="session-detail-head"><div><strong>${index + 1}회차</strong><span>${escapeHtml(formattedDate(session.performedAt, { year: "numeric", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" }) || "날짜 미입력")}</span></div>
+          <div class="session-summary"><span>${total === null ? "인원 미입력" : `총 ${total}명`}</span>${photos ? `<span>📷 ${photos}장</span>` : ""}<span class="session-chevron" aria-hidden="true">▾</span></div></summary>
+        <div class="session-body">
+          <p class="session-people"><span>참여 인원</span>${escapeHtml(participantsText(session))}</p>
+          ${sessionNotes(session)}
+          ${sessionPhotosHtml(session)}
+          <div class="detail-actions session-actions"><button class="text-button edit-session" type="button" data-index="${index}"${disabled}>수정</button><button class="text-button danger delete-session" type="button" data-index="${index}"${disabled}>삭제</button></div>
+        </div>
+      </details>`;
+      }).join("") : emptyState("", "아직 수행 회차가 없습니다", "위의 ＋ 회차 추가 버튼으로 도슨트를 진행한 날의 기록을 남겨 보세요.")}
     </section>`;
 }
 
@@ -961,6 +976,7 @@ async function saveSession() {
   if (state.editingSessionIndex === null) sessions.push(session);
   else sessions[state.editingSessionIndex] = session;
   records[index] = { ...records[index], sessions: sortSessions(sessions) };
+  state.openSessions.add(sessionKey(records[index], session));
   if (!await commitRecords({ ...state.records, [tab]: records })) {
     trashPhotos(uploaded);
     return;
@@ -1099,6 +1115,12 @@ elements.detail.addEventListener("click", (event) => {
     button.textContent = collapsed ? "더 보기" : "접기";
   }
 });
+elements.detail.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!details.matches?.("details.session-detail")) return;
+  if (details.open) state.openSessions.add(details.dataset.key);
+  else state.openSessions.delete(details.dataset.key);
+}, true);
 // Posters are external images; if one fails to load, drop it instead of
 // showing a broken image ("error" doesn't bubble, so listen in capture phase).
 elements.detail.addEventListener("error", (event) => {

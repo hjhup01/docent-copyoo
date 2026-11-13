@@ -83,6 +83,12 @@ def signed_out_app(root, configured):
     app.main()
 
 
+def open_session(at, record_id="d1", index=0):
+    """Sessions start collapsed; open one like a click on its summary."""
+    at.session_state[f"session-open-{record_id}-{index}"] = True
+    return at.run()
+
+
 def markdown_text(at):
     return "\n".join(element.value for element in at.markdown)
 
@@ -121,7 +127,12 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertFalse(at.exception)
         text = markdown_text(at)
         self.assertIn("빛의 층위", text)
-        self.assertIn("15명 (구분 없음)", text)      # old session without breakdown
+        # sessions start collapsed: a one-line summary, details hidden
+        self.assertEqual([e.label for e in at.expander], ["**1회차**  ·  2026년 10월 3일 오후 02:00  ·  총 15명"])
+        self.assertNotIn("15명 (구분 없음)", text)
+        self.assertFalse(any(b.key == "edit-session-0" for b in at.button))
+        open_session(at)
+        self.assertIn("15명 (구분 없음)", markdown_text(at))  # old session without breakdown
         self.assertIn("https://example.com", text)    # "누리집: …" became a fact cell
         self.assertIn("도슨트 수행 전시", text)
         at.button(key="pick-d2").click().run()
@@ -150,6 +161,10 @@ class StreamlitAppTests(unittest.TestCase):
     def test_add_session_with_audience_breakdown(self):
         at = self.app()
         at.button(key="add-session").click().run()
+        # inputs start at 0 so the -/+ buttons are usable
+        self.assertEqual([at.number_input(key=f"sf_{k}").value for k in ("adults", "teens", "children")], [0, 0, 0])
+        at.number_input(key="sf_adults").increment().run()
+        self.assertEqual(at.number_input(key="sf_adults").value, 1)
         at.number_input(key="sf_adults").set_value(12).run()
         at.number_input(key="sf_children").set_value(3).run()
         self.assertTrue(any("합계 15명" in caption.value for caption in at.caption))
@@ -162,7 +177,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual((new["participants"], new["adults"], new["teens"], new["children"]), (15, 12, "", 3))
 
     def test_editing_old_session_without_breakdown_keeps_total(self):
-        at = self.app()
+        at = open_session(self.app())
         at.button(key="edit-session-0").click().run()
         at.text_area(key="sf_notes").set_value("메모").run()
         at.button(key="sf_save").click().run()
@@ -170,7 +185,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual((session["participants"], session["notes"]), (15, "메모"))
 
     def test_cancel_in_confirmation_keeps_everything(self):
-        at = self.app()
+        at = open_session(self.app())
         at.button(key="del-record").click().run()
         self.assertTrue(any("삭제할까요" in m.value for m in at.markdown))  # asks first
         self.assertEqual(self.store()["writes"], 0)                       # nothing deleted yet
@@ -183,7 +198,7 @@ class StreamlitAppTests(unittest.TestCase):
         self.assertEqual(len(record["sessions"]), 1)
 
     def test_delete_session_after_confirmation(self):
-        at = self.app()
+        at = open_session(self.app())
         at.button(key="del-session-0").click().run()
         at.button(key="cf_delete").click().run()
         record = next(r for r in self.store()["records"] if r["id"] == "d1")

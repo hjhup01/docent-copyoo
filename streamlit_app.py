@@ -463,6 +463,16 @@ def render_detail(kind):
                         unsafe_allow_html=True)
 
 
+def session_summary(index, session):
+    """One-line summary shown while a session is collapsed."""
+    parts = [f"**{index + 1}회차**", core.korean_date(session.get("performedAt"), with_time=True) or "날짜 미입력"]
+    total = core.session_participants(session)
+    parts.append(f"총 {total}명" if total is not None else "인원 미입력")
+    if session.get("photos"):
+        parts.append(f"📷 {len(session['photos'])}장")
+    return "  ·  ".join(parts)
+
+
 def render_sessions(record):
     sessions = record.get("sessions") or []
     head, add = st.columns([5, 2], vertical_alignment="center")
@@ -474,18 +484,19 @@ def render_sessions(record):
                     unsafe_allow_html=True)
     for index in reversed(range(len(sessions))):
         session = sessions[index]
-        with st.container(border=True, key=f"session-box-{index}"):
-            title, edit, delete = st.columns([6, 1, 1], vertical_alignment="center")
-            when = core.korean_date(session.get("performedAt"), with_time=True) or "날짜 미입력"
-            title.markdown(f'<div class="session-head">{index + 1}회차<small>{esc(when)}</small></div>', unsafe_allow_html=True)
-            if edit.button("수정", key=f"edit-session-{index}"):
-                open_dialog("session", kind="docent", record_id=record["id"], index=index)
-            if delete.button("삭제", key=f"del-session-{index}"):
-                open_dialog("confirm-session", kind="docent", record_id=record["id"], index=index)
+        key = f"session-open-{record['id']}-{index}"
+        with st.expander(session_summary(index, session), key=key, on_change="rerun"):
+            if not st.session_state.get(key):
+                continue  # closed: skip the body (and its photo downloads) until it is opened
             st.markdown(f'<div class="people"><span>참여 인원</span>{esc(core.participants_text(session))}</div>{notes_html(session)}',
                         unsafe_allow_html=True)
             if session.get("photos"):
                 render_photo_gallery(session["photos"])
+            _, edit, delete = st.columns([6, 1, 1], vertical_alignment="center")
+            if edit.button("수정", key=f"edit-session-{index}"):
+                open_dialog("session", kind="docent", record_id=record["id"], index=index)
+            if delete.button("삭제", key=f"del-session-{index}"):
+                open_dialog("confirm-session", kind="docent", record_id=record["id"], index=index)
 
 
 # ---------- dialogs ----------
@@ -519,7 +530,7 @@ def open_dialog(name, **params):
         except ValueError:
             ss["sf_date"], ss["sf_time"] = date.today(), time(14, 0)
         for key, _ in core.AUDIENCE_LABELS:
-            ss[f"sf_{key}"] = session.get(key) if core.has_count(session.get(key)) else None
+            ss[f"sf_{key}"] = int(session[key]) if core.has_count(session.get(key)) else 0
         for key in ("questions", "notes", "impression"):
             ss[f"sf_{key}"] = session.get(key, "")
         ss["sf_photos"] = list(session.get("photos") or [])
@@ -746,8 +757,10 @@ def session_dialog(user, record_id, index):
     st.markdown("**참여 인원**")
     columns = st.columns(3)
     for column, (key, label) in zip(columns, core.AUDIENCE_LABELS):
-        column.number_input(f"{label} (명)", key=f"sf_{key}", min_value=0, max_value=100000, step=1, value=None, placeholder="0")
-    filled = [ss[f"sf_{key}"] for key, _ in core.AUDIENCE_LABELS if ss.get(f"sf_{key}") is not None]
+        column.number_input(f"{label} (명)", key=f"sf_{key}", min_value=0, max_value=100000, step=1)
+    # Inputs start at 0 so the -/+ buttons work (Streamlit disables them while a value is empty).
+    # 0 counts as "not entered", so all zeros keep an old total-only session as it was.
+    filled = [int(ss[f"sf_{key}"]) for key, _ in core.AUDIENCE_LABELS if ss.get(f"sf_{key}")]
     previous = (record.get("sessions") or [])[index] if index is not None else {}
     if filled:
         st.caption(f"합계 {sum(int(v) for v in filled)}명")
@@ -767,7 +780,7 @@ def session_dialog(user, record_id, index):
             return
         session = {
             "performedAt": datetime.combine(ss["sf_date"], ss["sf_time"]).strftime("%Y-%m-%dT%H:%M"),
-            **{key: int(ss[f"sf_{key}"]) if ss.get(f"sf_{key}") is not None else "" for key, _ in core.AUDIENCE_LABELS},
+            **{key: int(ss[f"sf_{key}"]) if ss.get(f"sf_{key}") else "" for key, _ in core.AUDIENCE_LABELS},
             **{key: ss.get(f"sf_{key}", "").strip() for key in ("questions", "notes", "impression")},
         }
         session["participants"] = sum(int(v) for v in filled) if filled else previous.get("participants", "")
